@@ -30,14 +30,17 @@ uint32_t eeprom_read_int32(uint8_t *addr);
 uint64_t eeprom_read_int64(uint8_t *addr);
 
 enum {
-    TIME_REFRESH_DELAY = 50L, INT_POWER_MONITOR_DELAY = 180L, EEPROM_WRITE_DELAY = 600000L, POWER_REFRESH_DELAY = 1000L
+    TIME_REFRESH_DELAY = 50L, INT_POWER_MONITOR_DELAY = 180L, EEPROM_WRITE_DELAY = 600000L, POWER_REFRESH_DELAY = 1000L, NEP_EEPROM_WRITE_DELAY = 60000L
 };
 
 char str[20];
 char ir_disp_str[20];
 const char line_1_fmt[] = "%ldmV %ldmA %s";
 const char line_2_fmt[] = "%ldmW %lumWh";
-const char line_3_fmt[] = "%ldmV %ldmV %ld";
+const char line_3_fmt_int[] = ">%ldmV %ldmWh";
+const char line_3_fmt_ext[] = "%ldmV> %ldmWh";
+const char line_3_fmt_int_big[] = ">%ldmV %ldWh";
+const char line_3_fmt_ext_big[] = "%ldmV> %ldWh";
 const char ir_fmt_str[] = "P: %x C: %x F: %x";
 IRMP_DATA irmp_data;
 uint8_t clk_adj_pos = 0;
@@ -63,9 +66,9 @@ long int power_2;
 long int power_1;
 long int power_0;
 
-uint64_t mWh_tot = 0UL;
+//uint64_t mWh_tot = 0UL;
+uint64_t _uWh_tot = 0UL;
 uint64_t uWh = 0UL;
-uint64_t uWh_0 = 0UL;
 
 uint8_t mode_inc = 1;
 
@@ -78,43 +81,48 @@ uint64_t now;
 uint64_t int_pow_mon_time = 0UL;
 uint64_t pow_refr_time = 0UL;
 uint64_t eeprom_time = 0UL;
-
 uint64_t time_time = 0UL;
+uint64_t nep_eeprom_write_time = 0UL;
+
+
+uint8_t batt_ext_int_swp = 0;
 
 const uint8_t max_fails = 2;
 
-#define REG_5V_VOLTAGE 4998L
+#define REG_5V_VOLTAGE 5020L
 
 /**
- * Charge controlling for 12 x 80386 cell 3.7v battery pack (recycled from old laptops)
+ * Charge controlling for 12 x 80386 cell 3.7v battery pack (recycled from old notebooks)
  */
-#define BATT_INT_RESISTANCE_MO 120UL
 
-#define MAX_OUTPUT_VOLTAGE_MV 4195UL
+#define NUM_18650_CELLS 12UL
+#define MAX_CHARGE_CURRENT_PER_18650_CELL 2000UL
+#define MAX_INPUT_POWER (NUM_18650_CELLS * MAX_CHARGE_CURRENT_PER_18650_CELL)
+#define BATT_INT_RESISTANCE_MO 30UL
 
-#define REDUCE_CHARGE_POWER_AT_VOTAGE_0 3980UL
-#define REDUCE_CHARGE_POWER_AT_VOTAGE_1 4050UL
-#define REDUCE_CHARGE_POWER_AT_VOTAGE_2 4100UL
-#define REDUCE_CHARGE_POWER_AT_VOTAGE_3 4120UL
-#define SOON_TO_NOT_ENOUGH_POWER_AT_VOLTAGE 7800UL
-#define NOT_ENOUGH_POWER_AT_VOLTAGE 7000UL
+#define SOON_TO_NOT_ENOUGH_POWER_AT_VOLTAGE 5000UL
+#define NOT_ENOUGH_POWER_AT_VOLTAGE 4000UL
 
-#define REDUCED_CHARGE_POWER_0 6000
-#define REDUCED_CHARGE_POWER_1 2800
-#define REDUCED_CHARGE_POWER_2 1220
-#define REDUCED_CHARGE_POWER_3 28
+#define REDUCE_CHARGE_POWER_AT_VOLTAGE_0 4000UL
+#define REDUCE_CHARGE_POWER_AT_VOLTAGE_1 4100UL
+#define REDUCE_CHARGE_POWER_AT_VOLTAGE_2 4150UL
+#define REDUCE_CHARGE_POWER_AT_VOLTAGE_3 4190UL
+#define REDUCE_CHARGE_POWER_AT_VOLTAGE_4 4195UL
 
+#define REDUCED_CHARGE_POWER_0 (MAX_INPUT_POWER * 889UL / 1000UL)
+#define REDUCED_CHARGE_POWER_1 (MAX_INPUT_POWER * 75UL / 100UL)
+#define REDUCED_CHARGE_POWER_2 (MAX_INPUT_POWER * 55UL / 100UL)
+#define REDUCED_CHARGE_POWER_3 (MAX_INPUT_POWER * 18UL / 100UL)
+
+#define MODE_NOT_ENOUGH_INPUT_POWER 7
+#define MODE_SOON_TO_NOT_ENOUGH_INPUT_POWER 6
 #define MODE_NORMAL_CHARGING 0
-
 #define MODE_REDUCED_CHARGING_0  1
 #define MODE_REDUCED_CHARGING_1  2
 #define MODE_REDUCED_CHARGING_2  3
 #define MODE_REDUCED_CHARGING_3  4
-
 #define MODE_FULLY_CHARGED 5
-
-#define MODE_SOON_TO_NOT_ENOUGH_INPUT_POWER 6
-#define MODE_NOT_ENOUGH_INPUT_POWER 7
+#define MODE_MAX_INPUT_POWER 8
 
 uint8_t mode = MODE_NORMAL_CHARGING;
 
@@ -130,11 +138,11 @@ int main(void) {
     timer_init();
     _delay_ms(10);
 
-    mWh_tot = eeprom_read_int64((uint8_t*) 0x01);
-    if (((long int) mWh_tot) < 0L) {
+    _uWh_tot = eeprom_read_int64((uint8_t*) 0x01);
+    if (((long int) _uWh_tot) < 0L) {
         eeprom_write_int64((uint8_t*) 0x01, (uint64_t) 0);
         _delay_ms(10);
-        mWh_tot = eeprom_read_int64((uint8_t*) 0x01);
+        _uWh_tot = eeprom_read_int64((uint8_t*) 0x01);
     }
     for (;;) {
 
@@ -158,14 +166,17 @@ int main(void) {
         adc_value_2 += read_adc(2);
         adc_value_2 /= 10;
 
-        long int in_voltage = ((adc_value_0 * 13072L) / 3266L) * REG_5V_VOLTAGE / 1023L;
+        //long int in_voltage = ((adc_value_0 * 13072L) / 2450L) * REG_5V_VOLTAGE / 1024L;
+        long int in_voltage = ((adc_value_0 * 12250) / 2450L) * REG_5V_VOLTAGE / 1024L;
+         
         if (adc_value_1 < 0L) {
             adc_value_1 = 0L;
         }
 
-        long int out_voltage = in_voltage - ((adc_value_2) * 14698L) / 4900L * REG_5V_VOLTAGE / 1023L;
+        long int out_voltage = in_voltage - ((adc_value_2) * 13090L) / 3266L * REG_5V_VOLTAGE / 1024L;
+        
 
-        long int current = (adc_value_1 - 512L) * 51098L / 1023L;
+        long int current = (adc_value_1 - 512L) * 51098L / 1024L;
 
         _current *= 30L;
         _current += current;
@@ -191,9 +202,7 @@ int main(void) {
 
         if (now - eeprom_time >= EEPROM_WRITE_DELAY) {
             eeprom_time = now;
-            mWh_tot = eeprom_read_int64((uint8_t*) 0x01) + (uWh - uWh_0) / 1000UL;
-            eeprom_write_int64((uint8_t*) 0x01, mWh_tot);
-            uWh_0 = uWh;
+            eeprom_write_int64((uint8_t*) 0x01, _uWh_tot);
         }
 
         if (now - int_pow_mon_time >= INT_POWER_MONITOR_DELAY) {
@@ -212,25 +221,35 @@ int main(void) {
             power = _voltage * (long int) _current / 1000L;
 
             uWh += (power * INT_POWER_MONITOR_DELAY) / 3600UL;
+            _uWh_tot += (power * INT_POWER_MONITOR_DELAY) / 3600UL;
 
-            if (_voltage <= NOT_ENOUGH_POWER_AT_VOLTAGE) {
+            if (power >= MAX_INPUT_POWER) {
+                mode = MODE_MAX_INPUT_POWER;
+                dec_pwm();
+            } else if (_voltage <= NOT_ENOUGH_POWER_AT_VOLTAGE) {
+                if(now - nep_eeprom_write_time >= NEP_EEPROM_WRITE_DELAY) {
+                    OCR0A = min_pwm;
+                    eeprom_write_int64((uint8_t*) 0x01, _uWh_tot);
+                    nep_eeprom_write_time = now;
+                    current_pwm = min_pwm;
+                }
                 mode = MODE_NOT_ENOUGH_INPUT_POWER;
                 current_pwm = min_pwm;
             } else if (_voltage <= SOON_TO_NOT_ENOUGH_POWER_AT_VOLTAGE) {
                 mode = MODE_SOON_TO_NOT_ENOUGH_INPUT_POWER;
                 dec_pwm();
             } else {
-                if (_batt_voltage >= REDUCE_CHARGE_POWER_AT_VOTAGE_3) {
+                if ((mode <= MODE_REDUCED_CHARGING_3 || mode == MODE_MAX_INPUT_POWER || mode == MODE_SOON_TO_NOT_ENOUGH_INPUT_POWER || mode == MODE_NOT_ENOUGH_INPUT_POWER) && _batt_voltage >= REDUCE_CHARGE_POWER_AT_VOLTAGE_3) {
                     mode = MODE_REDUCED_CHARGING_3;
-                } else if (_batt_voltage >= REDUCE_CHARGE_POWER_AT_VOTAGE_2) {
+                } else if ((mode <= MODE_REDUCED_CHARGING_2 || mode == MODE_MAX_INPUT_POWER || mode == MODE_SOON_TO_NOT_ENOUGH_INPUT_POWER || mode == MODE_NOT_ENOUGH_INPUT_POWER) && _batt_voltage >= REDUCE_CHARGE_POWER_AT_VOLTAGE_2) {
                     mode = MODE_REDUCED_CHARGING_2;
-                } else if (_batt_voltage >= REDUCE_CHARGE_POWER_AT_VOTAGE_1) {
+                } else if ((mode <= MODE_REDUCED_CHARGING_1 || mode == MODE_MAX_INPUT_POWER || mode == MODE_SOON_TO_NOT_ENOUGH_INPUT_POWER || mode == MODE_NOT_ENOUGH_INPUT_POWER) && _batt_voltage >= REDUCE_CHARGE_POWER_AT_VOLTAGE_1) {
                     mode = MODE_REDUCED_CHARGING_1;
-                } else if (_batt_voltage >= REDUCE_CHARGE_POWER_AT_VOTAGE_0) {
+                } else if ((mode <= MODE_REDUCED_CHARGING_0 || mode == MODE_MAX_INPUT_POWER || mode == MODE_SOON_TO_NOT_ENOUGH_INPUT_POWER || mode == MODE_NOT_ENOUGH_INPUT_POWER) && _batt_voltage >= REDUCE_CHARGE_POWER_AT_VOLTAGE_0) {
                     mode = MODE_REDUCED_CHARGING_0;
-                } else {
+                } else if (mode <= MODE_NORMAL_CHARGING || mode == MODE_MAX_INPUT_POWER || mode == MODE_SOON_TO_NOT_ENOUGH_INPUT_POWER || mode == MODE_NOT_ENOUGH_INPUT_POWER){
                     mode = MODE_NORMAL_CHARGING;
-                    if (_batt_voltage >= MAX_OUTPUT_VOLTAGE_MV) {
+                    if (_batt_voltage >= REDUCE_CHARGE_POWER_AT_VOLTAGE_4) {
                         mode = MODE_FULLY_CHARGED;
                         dec_pwm();
                     }
@@ -295,7 +314,9 @@ int main(void) {
                         mode == MODE_FULLY_CHARGED ?
                                 "FULL" :
                                 (mode == MODE_NORMAL_CHARGING ?
-                                        "NORM" : (mode == MODE_NOT_ENOUGH_INPUT_POWER ? "NEPW" : (mode == MODE_REDUCED_CHARGING_0 ? "REL0" : (mode == MODE_REDUCED_CHARGING_1 ? "REL1" : (mode == MODE_REDUCED_CHARGING_2 ? "REL2" : (mode == MODE_SOON_TO_NOT_ENOUGH_INPUT_POWER ? "SNEP" : "REL3")))))));
+                                        "NORM" :
+                                        (mode == MODE_NOT_ENOUGH_INPUT_POWER ?
+                                                "NEPW" : (mode == MODE_REDUCED_CHARGING_0 ? "REL0" : (mode == MODE_REDUCED_CHARGING_1 ? "REL1" : (mode == MODE_REDUCED_CHARGING_2 ? "REL2" : (mode == MODE_SOON_TO_NOT_ENOUGH_INPUT_POWER ? "SNEP" : (mode == MODE_MAX_INPUT_POWER ? "MAXP" : "REL3"))))))));
                 lcd_clear_line(lcd_line_one);
                 lcd_write_instruction_4f(lcd_SetCursor | lcd_line_one);
                 lcd_write_string_4f(str);
@@ -305,7 +326,24 @@ int main(void) {
                 lcd_write_instruction_4f(lcd_SetCursor | lcd_line_two);
                 lcd_write_string_4f(str);
 
-                sprintf(str, line_3_fmt, (long int) _op_voltage, (long int) _batt_voltage, (long int) mWh_tot);
+                if (_uWh_tot > 999999999UL) {
+                    // TODO: divide values so that they can be represented in the limited space on LCD.
+                    if (batt_ext_int_swp == 0) {
+                        batt_ext_int_swp = 1;
+                        sprintf(str, line_3_fmt_int_big, (long int) _batt_voltage, (long int) (_uWh_tot / 1000000UL));
+                    } else {
+                        batt_ext_int_swp = 0;
+                        sprintf(str, line_3_fmt_ext_big, (long int) _op_voltage, (long int) (_uWh_tot / 1000000UL));
+                    }
+                } else {
+                    if (batt_ext_int_swp == 0) {
+                        batt_ext_int_swp = 1;
+                        sprintf(str, line_3_fmt_int, (long int) _batt_voltage, (long int) (_uWh_tot / 1000UL));
+                    } else {
+                        batt_ext_int_swp = 0;
+                        sprintf(str, line_3_fmt_ext, (long int) _op_voltage, (long int) (_uWh_tot / 1000UL));
+                    }
+                }
                 lcd_clear_line(lcd_line_three);
                 lcd_write_instruction_4f(lcd_SetCursor | lcd_line_three);
                 lcd_write_string_4f(str);
