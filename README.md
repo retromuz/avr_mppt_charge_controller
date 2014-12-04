@@ -1,7 +1,7 @@
 avr_mppt_charge_controller
 ==========================
 
-Journey to build a maximum power point tracking (MPPT) charge controller for cheap.
+To build a maximum power point tracking (MPPT) charge controller for cheap.
 
 This is no big deal, thousands of people around the world has already done this.
 I started this to reuse components from few malfunctioning buck and boost converters I got from eBay.
