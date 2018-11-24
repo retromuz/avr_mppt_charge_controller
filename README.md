@@ -11,11 +11,11 @@ Than throwing them into garbage I thought of recycling them into my own intellig
 This is my first time working with inductors. It was a trial and fail case with trying out different PWM frequencies with inductors.
 Chose 32kHz as it gave me best efficiency out of the circuit.
 
-Circuit Diagram is added.
+Schematic diagram is added.
 
 Please bear in mind that I am a full time Linux, Java, Python guy who is into C, avr-gcc, Microcontrollers and electronics
 just for a hobby. Please don't be rude of the code quality of my C programming (because it is not what I do as a full time professinal).
 
-I think somebody will get some use out of this code. Feedbacks welcome!
+I think somebody will get some use out of this code. Feedbacks are welcome!
 
 Cheers!
