@@ -14,7 +14,7 @@ Chose 32kHz as it gave me best efficiency out of the circuit.
 Schematic diagram is added.
 
 Please bear in mind that I am a full time Linux, Java, Python guy who is into C, avr-gcc, Microcontrollers and electronics
-just for a hobby. Please don't be rude of the code quality of my C programming (because it is not what I do as a full time professinal).
+just for a hobby.
 
 I think somebody will get some use out of this code. Feedbacks are welcome!
 
